@@ -118,3 +118,7 @@ This writes a clean `.gpx` and a simplified `.kml` per track and prints distance
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Disclaimer
+
+For educational purposes only. See [DISCLAIMER.md](DISCLAIMER.md).
