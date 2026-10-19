@@ -1,0 +1,16 @@
+# GPS track data - shows where you've been (and where you live). Never commit.
+logs/
+raw/
+*.csv
+*.gpx
+*.kml
+*.kmz
+
+# Real cloud-init files contain WiFi passwords / login hashes (commit only *.example)
+sd-backup/
+boot/user-data
+boot/network-config
+
+# Python
+__pycache__/
+*.pyc

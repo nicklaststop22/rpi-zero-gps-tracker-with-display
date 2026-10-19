@@ -1,0 +1,14 @@
+[Unit]
+Description=PiTFT GPS Logger (display + buttons)
+After=multi-user.target
+
+[Service]
+Type=simple
+User=unlucky
+WorkingDirectory=/home/unlucky/gpslog
+ExecStart=/usr/bin/python3 /home/unlucky/gpslog/app.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

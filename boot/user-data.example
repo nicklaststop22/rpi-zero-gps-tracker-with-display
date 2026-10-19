@@ -1,0 +1,26 @@
+#cloud-config
+manage_resolv_conf: false
+
+hostname: "rpizerow2"
+manage_etc_hosts: true
+packages:
+- avahi-daemon
+apt:
+  preserve_sources_list: true
+  conf: |
+    Acquire {
+      Check-Date "false";
+    };
+timezone: "America/New_York"
+keyboard:
+  model: pc105
+  layout: "us"
+user:
+  name: "unlucky"
+  shell: /bin/bash
+  lock_passwd: false
+  passwd: "REPLACE_WITH_HASH_FROM_mkpasswd"  # mkpasswd --method=SHA-512
+  sudo: null
+ssh_pwauth: true
+runcmd:
+  - [ systemctl, enable, --now, ssh ]
