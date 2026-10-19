@@ -114,3 +114,7 @@ This writes a clean `.gpx` and a simplified `.kml` per track and prints distance
 | `gpslog/locus.py` | PMTK commands for the GPS chip's own flash logger (unused backup) |
 | `systemd/gpslog.service` | starts the app on boot |
 | `tools/convert_tracks.py` | CSV to clean GPX + Google-ready KML, with stats |
+
+## License
+
+MIT. See [LICENSE](LICENSE).
