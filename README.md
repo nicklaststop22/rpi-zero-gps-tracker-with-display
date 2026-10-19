@@ -35,6 +35,10 @@ When the screen is asleep, the first press only wakes it.
 
 ### Wiring the GPS
 
+> [!WARNING]
+> **If you wire the GPS HAT separately, power it from 3.3 V (Pi pin 1), not 5 V.**
+> The HAT has no regulator. It normally takes the Pi's 3.3 V straight from the header, and the GPS chip's absolute maximum is about 4.3 V. On 5 V it can be damaged, and its TX line will push 5 V into the Pi's RX pin (GPIO15), which is only rated for 3.3 V. (The separate Ultimate GPS *breakout* board is different: its VIN pin accepts 3.3 to 5 V.)
+
 The display sits on the 40-pin header. The GPS HAT connects with **4 jumper wires** from the HAT's own header holes to the same pin numbers on the Pi:
 
 | GPS HAT header hole | Pi header pin |
