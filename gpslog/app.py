@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """GPS logger front-end for the Adafruit PiTFT Plus 2.8".
 
-Live GPS readout on the panel. Four physical buttons (GPIO 17/22/23/24):
+Live GPS readout on the panel. Four physical buttons (GPIO 17/22/23/27):
   START  - begin Pi-side logging (writes CSV + GPX together)
   STOP   - stop logging (finalizes the GPX)
   READ   - show a list of recorded tracks
-  AWAKE  - toggle: screen stays on permanently  <->  auto-sleep after 2 min idle
+  POWER  - hold 3 s: finish the track, then shut the Pi down cleanly
 
-Sleep turns the backlight off via GPIO 18; the GPS reader and logger keep
-running underneath. When asleep, the first button press only wakes the screen.
+The screen sleeps after 2 min idle (backlight off via GPIO 18); the GPS reader
+and logger keep running underneath. When asleep, the first press only wakes it.
+Power-off needs passwordless sudo for `systemctl poweroff`.
 
 Run:  python3 app.py        (stop gpsd first - this app owns /dev/serial0)
 """
 import os
 import time
 import queue
+import signal
+import subprocess
 
 from gpiozero import Button, OutputDevice
 
@@ -28,6 +31,7 @@ BACKLIGHT_GPIO = 18
 SLEEP_AFTER = 120.0    # seconds of button inactivity before auto-sleep
 READ_VIEW_SECS = 6.0   # how long the READ list stays up
 LOG_INTERVAL = 10.0    # seconds between logged track points
+POWER_HOLD = 3.0       # seconds to hold POWER before shutting down
 
 ACTIONS = {label: gpio for gpio, label in ui.BUTTON_ROWS}
 
@@ -56,9 +60,23 @@ class App:
 
     def _wire_buttons(self):
         for label, gpio in ACTIONS.items():
-            b = Button(gpio, pull_up=True, bounce_time=0.05)
-            b.when_pressed = (lambda lbl=label: self.events.put(lbl))
+            if label == "POWER":
+                # a tap only wakes / hints; holding it is what powers off
+                b = Button(gpio, pull_up=True, bounce_time=0.05, hold_time=POWER_HOLD)
+                b.when_pressed = lambda: self.events.put("POWER_TAP")
+                b.when_held = lambda: self.events.put("POWEROFF")
+            else:
+                b = Button(gpio, pull_up=True, bounce_time=0.05)
+                b.when_pressed = (lambda lbl=label: self.events.put(lbl))
             self._buttons.append(b)
+
+    def _power_off(self):
+        """Close the track properly, say so on screen, then shut the Pi down."""
+        points = self.log.points if self.log.running else None
+        self.log.stop()
+        self.backlight.on()
+        self.fb.show(ui.render_shutdown(points))
+        subprocess.run(["sudo", "-n", "/usr/bin/systemctl", "poweroff"], check=False)
 
     def _wake(self):
         self.backlight.on()
@@ -78,15 +96,14 @@ class App:
         elif label == "READ":
             self.logs_cache = self.log.list_logs()
             self.view, self.view_until = "logs", time.time() + READ_VIEW_SECS
-        elif label == "AWAKE":
-            self.stay_awake = not self.stay_awake
-            if self.stay_awake:
-                self._wake(); self._flash("stay on")
-            else:
-                self.last_activity = time.time(); self._flash("auto-sleep 2m")
+        elif label == "POWER_TAP":
+            self._flash("hold 3s = off")
 
     # ---- main loop -------------------------------------------------
     def run(self):
+        # systemd stops us with SIGTERM on any shutdown/reboot; turn it into a
+        # normal exit so the finally block below still closes an open track
+        signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(SystemExit(0)))
         self.gps.start()
         self._wire_buttons()
         try:
@@ -99,6 +116,9 @@ class App:
                         label = self.events.get_nowait()
                     except queue.Empty:
                         break
+                    if label == "POWEROFF":   # a full 3 s hold, awake or asleep
+                        self._power_off()
+                        return
                     if self.asleep:
                         self._wake()          # first press only wakes
                     else:

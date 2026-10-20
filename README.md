@@ -10,6 +10,7 @@ No WiFi needed while tracking. Everything runs on the Pi.
 - Records to **CSV** (survives power cuts) and **GPX** (opens in mapping apps) at the same time
 - Point every **10 seconds**, timestamped from **GPS time** (the Pi Zero has no clock battery, so its own clock can be wrong offline)
 - Screen **sleeps after 2 minutes** idle (backlight off, logging continues); any button wakes it
+- **Safe power-off**: hold POWER for 3 s and the current track is closed properly before shutdown
 - Starts on boot as a systemd service
 - `tools/convert_tracks.py` repairs tracks and makes a simplified **KML for Google My Maps**
 
@@ -19,7 +20,7 @@ No WiFi needed while tracking. Everything runs on the Pi.
 |---|---|
 | Raspberry Pi Zero 2 W | WiFi is 2.4 GHz only |
 | Adafruit Ultimate GPS HAT (MTK3339) | runs on **3.3 V**, not 5 V |
-| Adafruit PiTFT Plus 2.8" resistive (ILI9341) | 4 buttons on GPIO 17/22/23/24, backlight on GPIO 18 |
+| Adafruit PiTFT Plus 2.8" (ILI9341, capacitive or resistive touch) | 4 buttons on GPIO 17/22/23/27, backlight on GPIO 18 |
 | 5 V / 2.5 A power supply | weak supplies make the WiFi drop out first |
 
 ### Buttons
@@ -29,7 +30,7 @@ No WiFi needed while tracking. Everything runs on the Pi.
 | 17 | START | start a new track |
 | 22 | STOP | stop and finish the track (press before cutting power) |
 | 23 | READ | list recorded tracks for a few seconds |
-| 24 | AWAKE | toggle: screen always on, or auto-sleep after 2 min |
+| 27 | POWER | **hold 3 s**: finish the track, then shut the Pi down cleanly |
 
 When the screen is asleep, the first press only wakes it.
 
@@ -60,8 +61,10 @@ Tested on Raspberry Pi OS (Debian 13, 32-bit) flashed with Raspberry Pi Imager.
 ```ini
 enable_uart=1
 dtoverlay=disable-bt
-dtoverlay=pitft28-resistive,rotate=90,speed=32000000,fps=25
+dtoverlay=pitft28-capacitive,rotate=90,speed=32000000,fps=25
+dtoverlay=pitft28-capacitive,touch-swapxy=true,touch-invx=true
 ```
+Use `pitft28-resistive` instead if your PiTFT has the soft resistive touch film. GPIO 24 is the touch interrupt line on this board, so no button uses it.
 `disable-bt` moves the good UART (`ttyAMA0`) from Bluetooth to the GPIO pins for the GPS.
 
 **2. No serial console** on the GPS port: `cmdline.txt` should have `console=tty1` and no `console=serial0`.
@@ -75,7 +78,7 @@ sudo systemctl mask gpsd.socket          # the app owns /dev/serial0, not gpsd
 sudo systemctl daemon-reload
 sudo systemctl enable --now gpslog.service
 ```
-Your user must be in the `video`, `gpio`, and `dialout` groups (the default first user already is). Python needs `pillow`, `numpy`, `gpiozero`, and `pyserial`, which are all preinstalled on Raspberry Pi OS.
+The POWER button runs `sudo -n systemctl poweroff`, so the user needs passwordless sudo (the default first user on Raspberry Pi OS has it). Your user must also be in the `video`, `gpio`, and `dialout` groups (the default first user already is). Python needs `pillow`, `numpy`, `gpiozero`, and `pyserial`, which are all preinstalled on Raspberry Pi OS.
 
 **WiFi via cloud-init (optional):** `boot/network-config.example` and `boot/user-data.example` show the files Imager writes to the boot partition. Fill in your own SSID, password, and password hash.
 

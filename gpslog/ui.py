@@ -1,5 +1,5 @@
 """Renders the 320x240 UI as a PIL image: GPS readout, logging status, and the
-four physical-button labels (START / STOP / READ / STAY-AWAKE)."""
+four physical-button labels (START / STOP / READ / POWER)."""
 from PIL import Image, ImageDraw, ImageFont
 
 W, H = 320, 240
@@ -13,7 +13,8 @@ ACCENT = (70, 140, 235)
 
 # Four buttons down the RIGHT edge (landscape, rotate=90), top->bottom. The
 # label doubles as the action key in app.py, so order == physical order.
-BUTTON_ROWS = [(17, "START"), (22, "STOP"), (23, "READ"), (24, "AWAKE")]
+# The 4th button is GPIO 27 on the PiTFT Plus; GPIO 24 is the touch IRQ line.
+BUTTON_ROWS = [(17, "START"), (22, "STOP"), (23, "READ"), (27, "POWER")]
 BTN_W = 90
 
 
@@ -43,14 +44,10 @@ def _buttons(d, stay_awake):
     rh = H // len(BUTTON_ROWS)
     for i, (gpio, label) in enumerate(BUTTON_ROWS):
         y0 = i * rh
-        if label == "AWAKE":
-            on = stay_awake
-            top = "STAY ON" if on else "SLEEP 2m"
-            box = GOOD if on else DIM
-            d.rectangle([x0, y0, W - 1, y0 + rh - 2], outline=box,
-                        fill=(12, 40, 20) if on else None)
-            d.text((x0 + 8, y0 + rh // 2 - 14), top, font=F_BTN, fill=FG)
-            d.text((x0 + 8, y0 + rh // 2 + 4), f"GPIO{gpio}", font=F_SM, fill=DIM)
+        if label == "POWER":
+            d.rectangle([x0, y0, W - 1, y0 + rh - 2], outline=BAD)
+            d.text((x0 + 8, y0 + rh // 2 - 14), "POWER", font=F_BTN, fill=FG)
+            d.text((x0 + 8, y0 + rh // 2 + 4), "hold 3s", font=F_SM, fill=DIM)
         else:
             d.rectangle([x0, y0, W - 1, y0 + rh - 2], outline=ACCENT)
             d.text((x0 + 8, y0 + rh // 2 - 14), label, font=F_BTN, fill=FG)
@@ -108,4 +105,15 @@ def render_logs(logs, stay_awake=False):
             d.text((220, y), f"{kb:.0f} KB", font=F_LBL, fill=DIM)
             y += 26
     _buttons(d, stay_awake)
+    return img
+
+
+def render_shutdown(saved_points=None):
+    """Shown while powering off, so you know it's safe to unplug once it goes dark."""
+    img = Image.new("RGB", (W, H), BG)
+    d = ImageDraw.Draw(img)
+    d.text((20, 70), "SHUTTING DOWN", font=F_H, fill=WARN)
+    if saved_points is not None:
+        d.text((20, 110), f"track saved ({saved_points} pts)", font=F_LBL, fill=GOOD)
+    d.text((20, 150), "unplug when the screen goes dark", font=F_LBL, fill=DIM)
     return img
