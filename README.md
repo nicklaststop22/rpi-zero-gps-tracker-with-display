@@ -1,16 +1,16 @@
 # rpi-zero-gps-tracker-with-display
 
-A pocket GPS tracker built on a **Raspberry Pi Zero 2 W**, an **Adafruit Ultimate GPS HAT**, and an **Adafruit PiTFT 2.8" display** with four buttons. It shows your live position on screen and records your route to the SD card as **CSV and GPX**, ready to drop onto Google Maps.
+A pocket GPS tracker built on a **Raspberry Pi Zero 2 W**, an **Adafruit Ultimate GPS HAT**, and a **Waveshare 2.13" e-Paper HAT** with **one button**. (The original 4-button Adafruit PiTFT version is still here as `gpslog/app_pitft.py`.) It shows your live position on screen and records your route to the SD card as **CSV and GPX**, ready to drop onto Google Maps.
 
 No WiFi needed while tracking. Everything runs on the Pi.
 
 ## Features
 
-- Live readout: fix status, satellites, latitude/longitude, altitude, speed, GPS time
+- Live e-ink readout: fix, satellites, latitude/longitude, speed (mph), altitude (ft), UTC, points logged and track time
+- E-ink is readable in sunlight and keeps its picture with no power
 - Records to **CSV** (survives power cuts) and **GPX** (opens in mapping apps) at the same time
 - Point every **10 seconds**, timestamped from **GPS time** (the Pi Zero has no clock battery, so its own clock can be wrong offline)
-- Screen **sleeps after 2 minutes** idle (backlight off, logging continues); any button wakes it
-- **Safe power-off**: hold POWER for 3 s and the current track is closed properly before shutdown
+- **One button**: tap to start/stop a track, **hold 3 s** to close the track and shut down safely
 - Starts on boot as a systemd service
 - `tools/convert_tracks.py` repairs tracks and makes a simplified **KML for Google My Maps**
 
@@ -20,19 +20,29 @@ No WiFi needed while tracking. Everything runs on the Pi.
 |---|---|
 | Raspberry Pi Zero 2 W | WiFi is 2.4 GHz only |
 | Adafruit Ultimate GPS HAT (MTK3339) | runs on **3.3 V**, not 5 V |
-| Adafruit PiTFT Plus 2.8" (ILI9341, capacitive or resistive touch) | 4 buttons on GPIO 17/22/23/27, backlight on GPIO 18 |
+| Waveshare 2.13" e-Paper HAT (V4 panel, SSD1680, 250x122) | SPI0 CE0, RST 17, DC 25, BUSY 24, PWR 18 |
+| Momentary push button | GPIO 27 (pin 13) to GND (pin 14) |
 | 5 V / 2.5 A power supply | weak supplies make the WiFi drop out first |
 
-### Buttons
+### Button and display wiring
 
-| GPIO | Button | Action |
-|---|---|---|
-| 17 | START | start a new track |
-| 22 | STOP | stop and finish the track (press before cutting power) |
-| 23 | READ | list recorded tracks for a few seconds |
-| 27 | POWER | **hold 3 s**: finish the track, then shut the Pi down cleanly |
+| Button | Action |
+|---|---|
+| tap | start a track / stop and save it |
+| hold 3 s | save the track, then shut the Pi down (screen keeps showing POWERED OFF) |
 
-When the screen is asleep, the first press only wakes it.
+The e-Paper HAT covers the whole header, so connect it with its **8-wire cable** instead and leave the header free for the GPS and button:
+
+| HAT wire | Pi pin |
+|---|---|
+| VCC | 17 (3.3 V) |
+| GND | 20 |
+| DIN | 19 (MOSI) |
+| CLK | 23 (SCLK) |
+| CS | 24 (CE0) |
+| DC | 22 (GPIO25) |
+| RST | 11 (GPIO17) |
+| BUSY | 18 (GPIO24) |
 
 ### Wiring the GPS
 
@@ -61,10 +71,9 @@ Tested on Raspberry Pi OS (Debian 13, 32-bit) flashed with Raspberry Pi Imager.
 ```ini
 enable_uart=1
 dtoverlay=disable-bt
-dtoverlay=pitft28-capacitive,rotate=90,speed=32000000,fps=25
-dtoverlay=pitft28-capacitive,touch-swapxy=true,touch-invx=true
+dtparam=spi=on
 ```
-Use `pitft28-resistive` instead if your PiTFT has the soft resistive touch film. GPIO 24 is the touch interrupt line on this board, so no button uses it.
+For the old PiTFT version instead, add `dtoverlay=pitft28-capacitive,rotate=90,speed=32000000,fps=25` and run `app_pitft.py`.
 `disable-bt` moves the good UART (`ttyAMA0`) from Bluetooth to the GPIO pins for the GPS.
 
 **2. No serial console** on the GPS port: `cmdline.txt` should have `console=tty1` and no `console=serial0`.
@@ -78,7 +87,7 @@ sudo systemctl mask gpsd.socket          # the app owns /dev/serial0, not gpsd
 sudo systemctl daemon-reload
 sudo systemctl enable --now gpslog.service
 ```
-The POWER button runs `sudo -n systemctl poweroff`, so the user needs passwordless sudo (the default first user on Raspberry Pi OS has it). Your user must also be in the `video`, `gpio`, and `dialout` groups (the default first user already is). Python needs `pillow`, `numpy`, `gpiozero`, and `pyserial`, which are all preinstalled on Raspberry Pi OS.
+Holding the button runs `sudo -n systemctl poweroff`, so the user needs passwordless sudo (the default first user on Raspberry Pi OS has it). Your user must also be in the `spi`, `gpio`, and `dialout` groups (the default first user already is). Python needs `pillow`, `spidev`, `gpiozero`, and `pyserial` (plus `numpy` for the PiTFT version), which are all preinstalled on Raspberry Pi OS.
 
 **WiFi via cloud-init (optional):** `boot/network-config.example` and `boot/user-data.example` show the files Imager writes to the boot partition. Fill in your own SSID, password, and password hash.
 
@@ -109,10 +118,13 @@ This writes a clean `.gpx` and a simplified `.kml` per track and prints distance
 
 | Path | What |
 |---|---|
-| `gpslog/app.py` | main loop: buttons, sleep/wake, rendering, logging |
+| `gpslog/app.py` | main loop: one button, e-ink updates, logging |
+| `gpslog/epaper.py` | small SSD1680 driver for the 2.13" e-Paper HAT (no vendor library needed) |
+| `gpslog/ui_epaper.py` | draws the 250x122 e-ink screen |
+| `gpslog/app_pitft.py` | older PiTFT version: 4 buttons, screen sleep |
 | `gpslog/gpsreader.py` | reads NMEA from `/dev/serial0` (GGA + RMC) |
 | `gpslog/logger.py` | writes CSV + GPX |
-| `gpslog/ui.py` | draws the 320x240 screen |
+| `gpslog/ui.py` | draws the 320x240 PiTFT screen |
 | `gpslog/fb.py` | pushes frames to `/dev/fb1` (RGB565); no pygame needed |
 | `gpslog/locus.py` | PMTK commands for the GPS chip's own flash logger (unused backup) |
 | `systemd/gpslog.service` | starts the app on boot |

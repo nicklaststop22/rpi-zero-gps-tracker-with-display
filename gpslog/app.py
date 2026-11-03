@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""GPS logger front-end for the Adafruit PiTFT Plus 2.8".
+"""GPS logger front-end for the Waveshare 2.13" e-Paper HAT + one button.
 
-Live GPS readout on the panel. Four physical buttons (GPIO 17/22/23/27):
-  START  - begin Pi-side logging (writes CSV + GPX together)
-  STOP   - stop logging (finalizes the GPX)
-  READ   - show a list of recorded tracks
-  POWER  - hold 3 s: finish the track, then shut the Pi down cleanly
+  tap         - start logging / stop logging (writes CSV + GPX together)
+  hold 3 s    - finish the track, then shut the Pi down cleanly
 
-The screen sleeps after 2 min idle (backlight off via GPIO 18); the GPS reader
-and logger keep running underneath. When asleep, the first press only wakes it.
+The button goes between GPIO 27 (pin 13) and GND (pin 14). The e-ink keeps its
+last picture with no power, so after power-off it still shows "POWERED OFF".
 Power-off needs passwordless sudo for `systemctl poweroff`.
+
+The old PiTFT version (4 buttons, colour screen) is app_pitft.py.
 
 Run:  python3 app.py        (stop gpsd first - this app owns /dev/serial0)
 """
@@ -19,142 +18,106 @@ import queue
 import signal
 import subprocess
 
-from gpiozero import Button, OutputDevice
+from gpiozero import Button
 
-from fb import Framebuffer
+from epaper import EPaper
 from gpsreader import GPSReader
 from logger import DualLogger
-import ui
+import ui_epaper as ui
 
 LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
-BACKLIGHT_GPIO = 18
-SLEEP_AFTER = 120.0    # seconds of button inactivity before auto-sleep
-READ_VIEW_SECS = 6.0   # how long the READ list stays up
-LOG_INTERVAL = 10.0    # seconds between logged track points
-POWER_HOLD = 3.0       # seconds to hold POWER before shutting down
-
-ACTIONS = {label: gpio for gpio, label in ui.BUTTON_ROWS}
+BUTTON_GPIO = 27
+LOG_INTERVAL = 10.0     # seconds between logged track points
+POWER_HOLD = 3.0        # seconds to hold the button before shutting down
+MIN_REDRAW = 5.0        # seconds between e-ink updates (each one costs ~0.4 s)
+FULL_EVERY = 60         # partial refreshes between full ones (clears ghosting)
 
 
 class App:
     def __init__(self):
         self.gps = GPSReader()
-        self.fb = Framebuffer()
         self.log = DualLogger(LOG_DIR, min_interval=LOG_INTERVAL)
-        self.backlight = OutputDevice(BACKLIGHT_GPIO, initial_value=True)
+        self.epd = EPaper()
         self.events = queue.Queue()
-        self._buttons = []
+        self._held = False
+        self.toast, self.toast_until = None, 0.0
+        self._last_img = None
+        self._last_draw = 0.0
+        self._partials = 0
 
-        self.log_state = "STOPPED"
-        self.stay_awake = False
-        self.asleep = False
-        self.last_activity = time.time()
-        self.toast = None
-        self.toast_until = 0.0
-        self.view = "live"           # or "logs"
-        self.view_until = 0.0
-        self.logs_cache = []
+    def _wire_button(self):
+        # act on release, so the start of a 3 s hold doesn't also toggle logging
+        self.button = Button(BUTTON_GPIO, pull_up=True, bounce_time=0.05,
+                             hold_time=POWER_HOLD)
 
-    def _flash(self, msg, secs=1.5):
+        def held():
+            self._held = True
+            self.events.put("POWEROFF")
+
+        def released():
+            if not self._held:
+                self.events.put("TOGGLE")
+            self._held = False
+
+        self.button.when_held = held
+        self.button.when_released = released
+
+    def _flash(self, msg, secs=4.0):
         self.toast, self.toast_until = msg, time.time() + secs
 
-    def _wire_buttons(self):
-        for label, gpio in ACTIONS.items():
-            if label == "POWER":
-                # a tap only wakes / hints; holding it is what powers off
-                b = Button(gpio, pull_up=True, bounce_time=0.05, hold_time=POWER_HOLD)
-                b.when_pressed = lambda: self.events.put("POWER_TAP")
-                b.when_held = lambda: self.events.put("POWEROFF")
-            else:
-                b = Button(gpio, pull_up=True, bounce_time=0.05)
-                b.when_pressed = (lambda lbl=label: self.events.put(lbl))
-            self._buttons.append(b)
+    def _draw(self, force=False):
+        now = time.time()
+        toast = self.toast if now < self.toast_until else None
+        elapsed = now - self.log.started_at if self.log.running else 0
+        img = ui.render(self.gps.snapshot(), self.log.running,
+                        self.log.points, elapsed, toast)
+        raw = img.tobytes()
+        if raw == self._last_img or (not force and now - self._last_draw < MIN_REDRAW):
+            return
+        full = self._partials >= FULL_EVERY
+        self.epd.show(img, full=full)
+        self._partials = 0 if full else self._partials + 1
+        self._last_img, self._last_draw = raw, now
 
     def _power_off(self):
-        """Close the track properly, say so on screen, then shut the Pi down."""
         points = self.log.points if self.log.running else None
         self.log.stop()
-        self.backlight.on()
-        self.fb.show(ui.render_shutdown(points))
+        self.epd.show(ui.render_shutdown(points), full=True)
+        self.epd.close()
         subprocess.run(["sudo", "-n", "/usr/bin/systemctl", "poweroff"], check=False)
 
-    def _wake(self):
-        self.backlight.on()
-        self.asleep = False
-        self.last_activity = time.time()
-
-    def _sleep(self):
-        self.backlight.off()
-        self.asleep = True
-
-    # ---- actions ---------------------------------------------------
-    def _do(self, label):
-        if label == "START":
-            self.log.start(); self.log_state = "RUNNING"; self._flash("logging")
-        elif label == "STOP":
-            self.log.stop(); self.log_state = "STOPPED"; self._flash("stopped")
-        elif label == "READ":
-            self.logs_cache = self.log.list_logs()
-            self.view, self.view_until = "logs", time.time() + READ_VIEW_SECS
-        elif label == "POWER_TAP":
-            self._flash("hold 3s = off")
-
-    # ---- main loop -------------------------------------------------
     def run(self):
         # systemd stops us with SIGTERM on any shutdown/reboot; turn it into a
         # normal exit so the finally block below still closes an open track
         signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(SystemExit(0)))
         self.gps.start()
-        self._wire_buttons()
+        self._wire_button()
+        self.epd.show(ui.render({}, False), full=True)
         try:
             while True:
-                now = time.time()
-
-                # drain button presses
-                while True:
-                    try:
-                        label = self.events.get_nowait()
-                    except queue.Empty:
-                        break
-                    if label == "POWEROFF":   # a full 3 s hold, awake or asleep
-                        self._power_off()
-                        return
-                    if self.asleep:
-                        self._wake()          # first press only wakes
+                try:
+                    ev = self.events.get(timeout=0.25)
+                except queue.Empty:
+                    ev = None
+                if ev == "POWEROFF":
+                    self._power_off()
+                    return
+                if ev == "TOGGLE":
+                    if self.log.running:
+                        self.log.stop(); self._flash("STOPPED - saved")
                     else:
-                        self.last_activity = now
-                        self._do(label)
-
-                # keep logging regardless of screen state
+                        self.log.start(); self._flash("STARTED")
                 self.log.log_fix(self.gps.snapshot())
-
-                # auto-sleep
-                if not self.stay_awake and not self.asleep \
-                        and now - self.last_activity > SLEEP_AFTER:
-                    self._sleep()
-
-                # expire the READ view
-                if self.view == "logs" and now > self.view_until:
-                    self.view = "live"
-
-                # render only when awake
-                if not self.asleep:
-                    toast = self.toast if now < self.toast_until else None
-                    if self.view == "logs":
-                        img = ui.render_logs(self.logs_cache, self.stay_awake)
-                    else:
-                        img = ui.render(self.gps.snapshot(), self.log_state,
-                                        self.stay_awake, toast)
-                    self.fb.show(img)
-
-                time.sleep(0.25)
+                self._draw(force=ev is not None)   # button presses show at once
         except KeyboardInterrupt:
             pass
         finally:
             self.log.stop()
             self.gps.stop()
-            self.backlight.on()   # leave the screen lit on exit
-            self.fb.close()
+            try:
+                self.epd.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

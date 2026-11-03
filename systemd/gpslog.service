@@ -1,5 +1,5 @@
 [Unit]
-Description=PiTFT GPS Logger (display + buttons)
+Description=GPS Logger (e-ink display + one button)
 After=multi-user.target
 
 [Service]
