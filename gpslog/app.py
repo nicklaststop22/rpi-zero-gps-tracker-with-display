@@ -92,6 +92,11 @@ class App:
         signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(SystemExit(0)))
         self.gps.start()
         self._wire_button()
+        # flash black then white first: one full refresh doesn't fully erase an
+        # image that sat on the panel for a long time (ghosting)
+        from PIL import Image
+        for fill in (0, 255):
+            self.epd.show(Image.new("1", (ui.W, ui.H), fill), full=True)
         self.epd.show(ui.render({}, False), full=True)
         try:
             while True:
