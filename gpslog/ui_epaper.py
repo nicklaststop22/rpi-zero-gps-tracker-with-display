@@ -29,8 +29,51 @@ def _dur(secs):
     return f"{secs // 3600}:{secs % 3600 // 60:02d}"
 
 
+# Only this many pixels from the left are drawn on. The right side of this
+# particular panel is damaged; set to W for a healthy one.
+USE_W = 110
+
+F_UI = _font(16, bold=True)
+F_XS = _font(12)
+
+
 def render(gps, logging, points=0, elapsed=0, toast=None):
     img = Image.new("1", (W, H), WHITE)
+    if USE_W >= W:
+        return _render_wide(img, gps, logging, points, elapsed, toast)
+    d = ImageDraw.Draw(img)
+    fix = (gps.get("fix", 0) or 0) >= 1
+    utc = gps.get("utc") or ""
+
+    d.rectangle([0, 0, USE_W - 1, 15], fill=BLACK)
+    d.text((3, 1), f"{'FIX' if fix else 'NO FIX'} {gps.get('sats', 0) or 0}sat",
+           font=F_XS, fill=WHITE)
+
+    lat, lon = gps.get("lat"), gps.get("lon")
+    if fix and lat is not None and lon is not None:
+        d.text((3, 18), f"{lat:.5f}", font=F_MID, fill=BLACK)
+        d.text((3, 35), f"{lon:.5f}", font=F_MID, fill=BLACK)
+        mph = (gps.get("speed_kn") or 0) * 1.852 * 0.621371
+        d.text((3, 52), f"{mph:.0f} mph", font=F_MID, fill=BLACK)
+    else:
+        d.text((3, 24), "searching", font=F_MID, fill=BLACK)
+        d.text((3, 42), "for sats...", font=F_MID, fill=BLACK)
+
+    d.line([0, 70, USE_W - 1, 70], fill=BLACK)
+    if toast:
+        d.text((3, 76), toast.split(" ")[0], font=F_UI, fill=BLACK)
+    elif logging:
+        d.text((3, 74), "LOGGING", font=F_UI, fill=BLACK)
+        d.text((3, 94), f"{points} pts {_dur(elapsed)}", font=F_XS, fill=BLACK)
+    else:
+        d.text((3, 74), "STOPPED", font=F_UI, fill=BLACK)
+        d.text((3, 94), "tap = start", font=F_XS, fill=BLACK)
+    if len(utc) >= 4:
+        d.text((3, 108), f"UTC {utc[0:2]}:{utc[2:4]}", font=F_XS, fill=BLACK)
+    return img
+
+
+def _render_wide(img, gps, logging, points, elapsed, toast):
     d = ImageDraw.Draw(img)
 
     # top bar: fix + sats + UTC hh:mm
