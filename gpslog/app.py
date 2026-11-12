@@ -28,8 +28,9 @@ import ui_epaper as ui
 LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
 BUTTON_GPIO = 27
 LOG_INTERVAL = 10.0     # seconds between logged track points
-MIN_REDRAW = 5.0        # seconds between e-ink updates (each one costs ~0.4 s)
-FULL_EVERY = 0          # partial refreshes between full ones (clears ghosting)
+MIN_REDRAW = 30.0       # seconds between e-ink updates; each refresh runs the
+                        # panel's HV booster, which is noisy right above the GPS antenna
+FULL_EVERY = 60         # partial refreshes between full ones (clears ghosting)
 
 
 class App:
